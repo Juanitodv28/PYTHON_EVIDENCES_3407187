@@ -1,14 +1,11 @@
 from fastapi import APIRouter, HTTPException, status
 from ..modelos.transacciones import Transaccion, TransaccionCrear, TransaccionEditar
 from ..modelos.facturas import Factura
-from ..listas import lista_facturas, lista_transacciones
+# Quitamos las listas porque ya todo es por base de datos
 from ..conexion_bd import Sesion_dependencia
 from sqlmodel import select
 
 rutas_transacciones = APIRouter()
-
-# lista_facturas: list[Factura] = []
-# lista_transacciones: list[Transaccion] = []
 
 
 @rutas_transacciones.get("/transacciones", response_model=list[Transaccion])
@@ -19,22 +16,19 @@ async def listar_transacciones(sesion: Sesion_dependencia):
 
 
 @rutas_transacciones.get("/transacciones/{id_transaccion}", response_model=Transaccion)
-async def listar_transaccion(id_transaccion: int):
-    # recorrer la lista_transacciones
-    for i, obj_transaccion in enumerate(lista_transacciones):
-        if obj_transaccion.id == id_transaccion:
-            return obj_transaccion
+async def listar_transaccion(id_transaccion: int, sesion: Sesion_dependencia): # Agregamos sesion
+    # Buscamos directo en la BD
+    transaccion_bd = sesion.get(Transaccion, id_transaccion)
 
-    raise HTTPException(
-        status_code=status.HTTP_400_BAD_REQUEST,
-        detail=f"La transaccion con id {id_transaccion}, no existe."
-    )
+    if not transaccion_bd:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"La transaccion con id {id_transaccion}, no existe."
+        )
+    return transaccion_bd
 
 
-@rutas_transacciones.post(
-    "/transacciones/{factura_id}",
-    response_model=Transaccion
-)
+@rutas_transacciones.post("/transacciones/{factura_id}", response_model=Transaccion)
 async def crear_transaccion(
     factura_id: int,
     datos_transaccion: TransaccionCrear,
@@ -50,7 +44,7 @@ async def crear_transaccion(
             detail=f"La Factura con id {factura_id}, no existe.",
         )
 
-    # validar datos de la transaccion - json y pasamoa a dict
+    # validar datos de la transaccion
     transaccion_dict = datos_transaccion.model_dump()
     transaccion_dict["factura_id"] = factura_id
     transaccion_val = Transaccion.model_validate(transaccion_dict)
@@ -63,59 +57,46 @@ async def crear_transaccion(
     return transaccion_val
 
 
-
 @rutas_transacciones.patch("/transacciones/{id_transaccion}", response_model=Transaccion)
 async def editar_transaccion(
     id_transaccion: int,
-    datos_transaccion: TransaccionEditar
+    datos_transaccion: TransaccionEditar,
+    sesion: Sesion_dependencia # Agregamos sesion
 ):
-    for i, obj_transaccion in enumerate(lista_transacciones):
-        if obj_transaccion.id == id_transaccion:
+    # Buscamos en BD
+    transaccion_bd = sesion.get(Transaccion, id_transaccion)
 
-            transaccion_val = Transaccion.model_validate(
-                datos_transaccion.model_dump()
-            )
+    if not transaccion_bd:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"La transaccion con id {id_transaccion}, no existe."
+        )
 
-            transaccion_val.id = id_transaccion
-            transaccion_val.factura_id = obj_transaccion.factura_id
+    # Extraemos los datos a actualizar
+    datos_nuevos = datos_transaccion.model_dump(exclude_unset=True)
+    for key, value in datos_nuevos.items():
+        setattr(transaccion_bd, key, value)
 
-            lista_transacciones[i] = transaccion_val
+    sesion.add(transaccion_bd)
+    sesion.commit()
+    sesion.refresh(transaccion_bd)
 
-            # actualizar también dentro de la factura
-            for factura in lista_facturas:
-                if factura.id == transaccion_val.factura_id:
-                    for j, transaccion in enumerate(factura.transacciones):
-                        if transaccion.id == id_transaccion:
-                            factura.transacciones[j] = transaccion_val
-                            break
-
-            return transaccion_val
-
-    raise HTTPException(
-        status_code=status.HTTP_400_BAD_REQUEST,
-        detail=f"La transaccion con id {id_transaccion}, no existe."
-    )
+    return transaccion_bd
 
 
 @rutas_transacciones.delete("/transacciones/{id_transaccion}", response_model=Transaccion)
-async def eliminar_transaccion(id_transaccion: int):
-    for i, obj_transaccion in enumerate(lista_transacciones):
-        if obj_transaccion.id == id_transaccion:
+async def eliminar_transaccion(id_transaccion: int, sesion: Sesion_dependencia): # Agregamos sesion
+    # Buscamos en BD
+    transaccion_bd = sesion.get(Transaccion, id_transaccion)
 
-            transaccion_eliminada = lista_transacciones.pop(i)
+    if not transaccion_bd:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"La transaccion con id {id_transaccion}, no existe."
+        )
 
-            # eliminar de la factura
-            for factura in lista_facturas:
-                if factura.id == transaccion_eliminada.factura_id:
-                    factura.transacciones = [
-                        t for t in factura.transacciones
-                        if t.id != id_transaccion
-                    ]
-                    break
+    # Borramos de la BD
+    sesion.delete(transaccion_bd)
+    sesion.commit()
 
-            return transaccion_eliminada
-
-    raise HTTPException(
-        status_code=status.HTTP_400_BAD_REQUEST,
-        detail=f"La transaccion con id {id_transaccion}, no existe."
-    )
+    return transaccion_bd
